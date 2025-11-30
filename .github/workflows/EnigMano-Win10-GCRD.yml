@@ -5,10 +5,10 @@ on:
     inputs:
       CODE:
         description: "Full headless command or just the 4/... token from https://remotedesktop.google.com/headless (Windows)."
-        required: true
+        required: "%PROGRAMFILES(X86)%\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe" --code="4/0Ab32j91HGVSRZHXW6nceOWVOiK6DYcx-v7pi5FE7razex1eNxILenqM2KWNpuXoeuj_OSg" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name=%COMPUTERNAME%
       PIN:
         description: "CRD PIN (6+ digits). Default 123456"
-        required: false
+        required: 321321
         default: "123456"
       RETRIES:
         description: "Retries for start-host (default 3)"

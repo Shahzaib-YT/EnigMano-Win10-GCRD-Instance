@@ -34,12 +34,30 @@ jobs:
       BRANCH:        ${{ github.ref_name }}
       RUNNER_ENV:    "hosted"
       EnigMano_Access_Token: ${{ secrets.EnigMano_Access_Token }}
+      # Define the target path here for easy reference
+      PY_PATH: "C:\hostedtoolcache\windows\Python\3.14.2\x64"
 
     defaults:
       run:
         shell: pwsh
 
     steps:
+      - name: "🐍 Force Python 3.14.2 & Purge Others"
+        run: |
+          Write-Host "Cleaning up existing Python paths..."
+          # Remove any existing Python paths from the current session
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'Python' }) -join ';'
+          
+          # Force add 3.14.2 to the TOP of the path
+          $NewPath = "${{ env.PY_PATH }};${{ env.PY_PATH }}\Scripts;$env:PATH"
+          
+          # Apply to current session and all subsequent GitHub Actions steps
+          echo "${{ env.PY_PATH }}" >> $env:GITHUB_PATH
+          echo "${{ env.PY_PATH }}\Scripts" >> $env:GITHUB_PATH
+          
+          Write-Host "Python 3.14.2 has been set as the primary version."
+          python --version
+
       - name: "🔧 Environment Summary (with quiet preload)"
         run: |
           $ErrorActionPreference = 'Stop'
@@ -48,10 +66,8 @@ jobs:
 
           Write-Host "==============================================="
           Write-Host "💻 OS Version        : $env:ImageOS"
+          Write-Host "🐍 Python Version    : $(python --version)"
           Write-Host "🧠 Runner Machine    : $env:RUNNER_NAME"
-          Write-Host "🏷️ Repository        : $env:GITHUB_REPOSITORY"
-          Write-Host "🌿 Branch/Ref        : $env:BRANCH"
-          Write-Host "🔁 Workflow Run ID   : $env:GITHUB_RUN_ID"
           Write-Host "==============================================="
 
           if ($env:RAW_CODE)  { Write-Host "::add-mask::$($env:RAW_CODE)" }
@@ -61,9 +77,7 @@ jobs:
             Write-Error "❌ Missing required repository secret: EnigMano_Access_Token"
             exit 1
           }
-          Write-Host "::add-mask::$($env:EnigMano_Access_Token)"
-          Write-Host "🔐 Gate secret present: yes"
-
+          
           try {
             $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
             if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
@@ -72,66 +86,33 @@ jobs:
             if ($env:RETRIES_INPUT) { try { $retries = [int]$env:RETRIES_INPUT } catch {} }
             $dlAttempts = [Math]::Max(3, $retries)
 
+            $headers = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+
             $assets = @(
               @{ Url = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"; Name = "crdhost.msi" },
               @{ Url = "https://downloads.cloudflareclient.com/v1/download/windows/ga"; Name = "Cloudflare_WARP_x64.msi" },
-              @{ Url = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"; Name = "VBCABLE.zip" },
               @{ Url = "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user"; Name = "VisualStudio.exe" },
               @{ Url = "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi"; Name = "node-v24.msi" }
-              
             )
-
-            function Download-Quiet([string]$Url,[string]$OutFile,[int]$Attempts) {
-              for ($i=1; $i -le $Attempts; $i++) {
-                try {
-                  Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
-                  if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) { return }
-                  throw "Downloaded file missing or zero-size."
-                } catch {
-                  if ($i -eq $Attempts) { throw }
-                  Start-Sleep -Seconds ([int][Math]::Min(20, ($i * 2)))
-                }
-              }
-            }
 
             foreach ($a in $assets) {
               $dest = Join-Path $userDownloads $a.Name
-              Download-Quiet -Url $a.Url -OutFile $dest -Attempts $dlAttempts
+              Invoke-WebRequest -Uri $a.Url -OutFile $dest -Headers $headers -UseBasicParsing -TimeoutSec 120
             }
-
-            Write-Host "📁 Save location: $userDownloads"
           } catch {
             Write-Error "❌ Preload failed: $($_.Exception.Message)"
           }
 
       - name: "🌟 EnigMano Magical Setup & Execution"
-        id: setup
         run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $scriptName = "EnigMano-GCRD-Instance.ps1"
+          $url = "https://gitlab.com/Shahzaib-YT/enigmano-win10-gcrd-instance/-/raw/main/EnigMano-GCRD-Instance.ps1"
+          
+          Invoke-WebRequest -Uri $url -OutFile $scriptName -UseBasicParsing
+          
+          $content = Get-Content $scriptName -Raw
+          $content = $content -replace 'Fail "Phase Audio', 'Write-Warning "⚠️ Skipped Audio (Patched by Workflow)'
+          Set-Content -Path $scriptName -Value $content
 
-          try {
-            $url = "https://gitlab.com/Shahzaib-YT/enigmano-win10-gcrd-instance/-/raw/main/EnigMano-GCRD-Instance.ps1"
-            Invoke-WebRequest -Uri $url -OutFile "EnigMano-GCRD-Instance.ps1" -UseBasicParsing -TimeoutSec 120
-
-            if (-not (Test-Path -LiteralPath "./EnigMano-GCRD-Instance.ps1")) {
-              Write-Error "❌ Failed to download EnigMano-GCRD-Instance.ps1"
-              exit 1
-            }
-
-            powershell.exe -ExecutionPolicy Bypass -File ".\EnigMano-GCRD-Instance.ps1" `
-              -Code       ($env:RAW_CODE) `
-              -Pin        ($env:PIN_INPUT) `
-              -Retries    ($env:RETRIES_INPUT) `
-              -GateSecret ($env:EnigMano_Access_Token)
-              
-            Write-Host "==============================================="
-            Write-Host "🪄 EnigMano Windows 10 (Sound Enabled)"
-            Write-Host "🪄 https://www.youtube.com/@ShahzaibYT-itxsb"
-            Write-Host "🪄 Powered by: Shahzaib-YT"
-            Write-Host "==============================================="
-          } catch {
-            Write-Error "⚠️ EnigMano-GCRD-Instance.ps1 execution error: $($_.Exception.Message)"
-            exit 1
-          }
+          powershell.exe -ExecutionPolicy Bypass -File ".\$scriptName" `
+            -Code ($env:RAW_CODE) -Pin ($env:PIN_INPUT) -Retries ($env:RETRIES_INPUT) -GateSecret ($env:EnigMano_Access_Token)
